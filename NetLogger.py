@@ -10,6 +10,9 @@
 import os
 import subprocess
 import datetime
+import sys
+# from scapy.all import *
+
 import requests
 import re
 from time import sleep
@@ -28,11 +31,11 @@ import logging
 
 # 配置文件路径
 CONFIG = {
-    "password"        : "Ronghui123",  # 替换为你自己的安全密码
-    "server_url"      : "http://your-server-url/upload",  # 替换为服务器上传地址
-    "log_directory"   : "./logs",  # 本地日志存储位置
-    "interval_seconds": 3600,  # 日志上传间隔时间，单位秒（1小时）
-    "log_file"        : "service_log.txt",  # 服务运行时的日志文件
+    "password": "Ronghui123",  # 替换为你自己的安全密码
+    "server_url": "http://your-server-url/upload",  # 替换为服务器上传地址
+    "log_directory": "./logs",  # 本地日志存储位置
+    "interval_seconds": 10,  # 日志上传间隔时间，单位秒（1小时）
+    "log_file": "service_log.txt",  # 服务运行时的日志文件
 }
 
 # 配置日志记录
@@ -46,7 +49,7 @@ logging.basicConfig(
 class NetworkLoggerService(win32serviceutil.ServiceFramework):
     _svc_name_ = "NetworkLoggerService"
     _svc_display_name_ = "Network Logger Service"
-    _svc_description_ = "融汇Turing小组出品,客户端网络访问日志获取服务"
+    _svc_description_ = "融汇Turing小组出品，客户端网络访问日志获取服务"
 
     def __init__(self, args):
         win32serviceutil.ServiceFramework.__init__(self, args)
@@ -70,15 +73,15 @@ class NetworkLoggerService(win32serviceutil.ServiceFramework):
             try:
                 # 捕获网络端口信息
                 port_data = capture_network_ports()
-
+                print("捕获网络端口信息",port_data)
                 # 捕获 HTTP 请求中的 URL
                 url_data = capture_http_requests()
-
+                print("捕获 HTTP 请求中的 URL", url_data)
                 # 本地存储加密日志
                 log_files = store_log_locally_encrypted(port_data, url_data, encryption_key)
-
+                print("本地存储加密日志", log_files)
                 # 上传日志到服务器
-                upload_logs_to_server(log_files)
+                # upload_logs_to_server(log_files)
 
             except Exception as e:
                 logging.error(f"Error during service execution: {e}")
@@ -119,6 +122,8 @@ def capture_network_ports():
         if result.returncode != 0:
             raise Exception(result.stderr)
         logging.info("Successfully captured network port data.")
+        # print(result.stdout)
+        print("Successfully captured network port data.")
         return result.stdout
     except Exception as e:
         logging.error(f"Failed to capture network ports: {e}")
@@ -129,7 +134,8 @@ def capture_network_ports():
 def capture_http_requests():
     urls = []
     try:
-        with pydivert.WinDivert("tcp.DstPort == 80 or tcp.SrcPort == 80") as w:
+        with pydivert.WinDivert("tcp.DstPort == 80 or tcp.DstPort == 443") as w:
+            print(w)
             for packet in w:
                 try:
                     payload = packet.payload.decode('utf-8', errors='ignore')
@@ -138,9 +144,14 @@ def capture_http_requests():
                         host = match.group(1)
                         urls.append(f"http://{host}")
                     w.send(packet)
+                    # print("payload",payload)
+                    print("packet",packet.dst_addr,packet.dst_port,str(packet.payload))
+                    print("urls",urls)
                 except Exception as e:
                     logging.error(f"Failed to parse packet: {e}")
+
         logging.info("Successfully captured HTTP requests.")
+        print("Successfully captured HTTP requests.")
     except Exception as e:
         logging.error(f"Failed to capture HTTP requests: {e}")
     return urls
@@ -209,4 +220,3 @@ if __name__ == '__main__':
     else:
         # 如果修改过名字，名字要统一
         win32serviceutil.HandleCommandLine(NetworkLoggerService)
-
