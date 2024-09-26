@@ -1,9 +1,11 @@
-from scapy.all import sniff
+from scapy.all import sniff,Raw
 from scapy.layers.inet import TCP, IP
 import time
 
 def packet_callback(packet):
+    print(packet[Raw])
     if packet.haslayer(IP) and packet.haslayer(TCP):
+        print(packet)
         ip_src = packet[IP].src
         ip_dst = packet[IP].dst
         port_src = packet[TCP].sport

@@ -4,7 +4,7 @@ import time
 
 # 定义过滤条件，只捕获 HTTP 和 HTTPS 流量
 # HTTP 通常在 80 端口，HTTPS 在 443 端口
-FILTER = "tcp port 80 or tcp port 443"
+FILTER = "tcp port 443"
 
 def extract_http_info(packet):
     """ 从数据包中提取HTTP请求的URL和其他信息 """
@@ -30,14 +30,14 @@ def extract_http_info(packet):
                   f"Destination IP: {dst_ip}, Destination Port: {dst_port}")
 
             # 将数据写入日志文件
-            with open("network_log_2.txt", "a") as logfile:
+            with open("network_log_22.txt", "a") as logfile:
                 logfile.write(f"Time: {timestamp}, Method: {method}, URL: {url}, "
                               f"Source IP: {src_ip}, Source Port: {src_port}, "
                               f"Destination IP: {dst_ip}, Destination Port: {dst_port}\n")
 
 # 监听并捕获数据包
 def start_sniffing():
-    sniff(filter=FILTER, prn=extract_http_info, store=0)
+    sniff(filter="tcp port 443", prn=extract_http_info, store=0)
 
 if __name__ == "__main__":
     print("Starting HTTP packet capture...")

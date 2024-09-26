@@ -8,6 +8,10 @@ def packet_callback(packet):
     if IP in packet:
         ip_src = packet[IP].src
         ip_dst = packet[IP].dst
+        src_port = packet[TCP].sport
+        dst_port = packet[TCP].dport
+
+
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         # HTTP 流量处理（TCP 80端口）
@@ -18,8 +22,14 @@ def packet_callback(packet):
                     # 提取HTTP请求头中的URL
                     request = http_payload.split("\r\n")[0]
                     url = re.search(r'(?i)(GET|POST) (.*?) HTTP', request)
+                    # method = url.group("method")
                     if url:
-                        print(f"[{timestamp}] HTTP Source IP: {ip_src} Destination IP: {ip_dst} URL: {url.group(2)}")
+                        print(f"[{timestamp}] HTTP Source IP: {ip_src} Source Port: {src_port}, Destination IP: {ip_dst} URL: {url.group(2)} Destination Port: {dst_port}")
+                        # 将数据写入日志文件
+                        with open("network_log_3.txt", "a") as logfile:
+                            logfile.write(f"Time: {timestamp}, URL: {url.group(2)}, "
+                                          f"Source IP: {ip_src}, Source Port: {src_port}, "
+                                          f"Destination IP: {ip_dst}, Destination Port: {dst_port}\n")
                 except:
                     pass
 
@@ -36,7 +46,12 @@ def packet_callback(packet):
                         sni_length = int.from_bytes(sni_length, 'big')
                         sni = payload[sni_start:sni_start + sni_length].decode()
 
-                        print(f"[{timestamp}] HTTPS Source IP: {ip_src} Destination IP: {ip_dst} SNI/Domain: {sni}")
+                        print(f"[{timestamp}] HTTPS Source IP: {ip_src} Source Port: {src_port}, Destination IP: {ip_dst} SNI/Domain: {sni} Destination Port: {dst_port}")
+                        # 将数据写入日志文件
+                        with open("network_log_3.txt", "a") as logfile:
+                            logfile.write(f"Time: {timestamp}, URL: {sni}, "
+                                          f"Source IP: {ip_src}, Source Port: {src_port}, "
+                                          f"Destination IP: {ip_dst}, Destination Port: {dst_port}\n")
                     except:
                         pass
 
