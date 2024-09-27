@@ -225,8 +225,8 @@ def start_upload_threads():
 
 # Windows 服务类
 class NetLoggerService(win32serviceutil.ServiceFramework):
-    _svc_name_ = "NetLoggerService"
-    _svc_display_name_ = "NetLoggerService"
+    _svc_name_ = "Network Logger Service"
+    _svc_display_name_ = "Network Logger Service"
     _svc_description_ = "融汇Turing小组出品，客户端网络访问日志获取"
 
     def __init__(self, args):
