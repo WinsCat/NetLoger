@@ -1,5 +1,3 @@
-import sys
-
 import win32serviceutil
 import win32service
 import win32event
@@ -30,6 +28,9 @@ BATCH_SIZE = 10  # 每次批量处理的包数量
 MAX_CONCURRENT_UPLOADS = 4  # 最大同时并发上传数量
 MAX_LOG_RETENTION_DAYS = 7  # 日志保留的天数
 LOG_LOCK = Lock()  # 用于线程安全的日志操作
+
+# 网络共享路径（注意双斜杠）
+SHARED_FOLDER_PATH = r"\\ServerName\SharedFolder"  # 共享文件夹的路径
 
 # 队列
 queue = Queue(maxsize=100)  # 数据包处理队列，限制队列的大小，避免内存过载
@@ -197,7 +198,8 @@ def upload_with_retry(log_file_path):
     global current_uploads
     folder_path, log_filename = os.path.split(log_file_path)
     terminal_name = get_terminal_name()  # 获取终端名称
-    destination_path = os.path.join(f'C:\\path\\to\\server\\upload', terminal_name, folder_path)  # 包含终端名称的路径
+    # 上传路径为服务器共享文件夹，包含终端名称的路径
+    destination_path = os.path.join(SHARED_FOLDER_PATH, terminal_name, folder_path)  # 包含终端名称的路径
 
     if not os.path.exists(destination_path):
         os.makedirs(destination_path)
@@ -207,6 +209,7 @@ def upload_with_retry(log_file_path):
 
     while attempt < UPLOAD_RETRY_LIMIT:
         try:
+            # 复制日志文件到共享文件夹
             shutil.copy(log_file_path, destination_path)
             logging.info(f"Log file {log_file_path} successfully uploaded to {destination_path}.")
             # 标记日志已成功上传
