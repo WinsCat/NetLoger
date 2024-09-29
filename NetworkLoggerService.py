@@ -1,3 +1,5 @@
+import sys
+
 import win32serviceutil
 import win32service
 import win32event
@@ -265,8 +267,8 @@ def start_upload_threads():
 # Windows 服务类
 class NetworkLoggerService(win32serviceutil.ServiceFramework):
     _svc_name_ = "NetworkLoggerService"
-    _svc_display_name_ = "NetworkLoggerService"
-    _svc_description_ = "融汇Turing小组出品，客户端网络访问日志获取"
+    _svc_display_name_ = "Network Logger Service"
+    _svc_description_ = "融汇Turing小组出品，客户端网络访问日志获取。"
 
     def __init__(self, args):
         win32serviceutil.ServiceFramework.__init__(self, args)
