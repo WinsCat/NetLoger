@@ -1,3 +1,5 @@
+import sys
+
 import win32serviceutil
 import win32service
 import win32event
@@ -30,7 +32,7 @@ MAX_LOG_RETENTION_DAYS = 7  # 日志保留的天数
 LOG_LOCK = Lock()  # 用于线程安全的日志操作
 
 # 网络共享路径（注意双斜杠）
-SHARED_FOLDER_PATH = r"\\ServerName\SharedFolder"  # 共享文件夹的路径
+SHARED_FOLDER_PATH = r"\\SERVERF10\NetLogs"  # 共享文件夹的路径
 
 # 队列
 queue = Queue(maxsize=100)  # 数据包处理队列，限制队列的大小，避免内存过载
@@ -212,6 +214,7 @@ def upload_with_retry(log_file_path):
             # 复制日志文件到共享文件夹
             shutil.copy(log_file_path, destination_path)
             logging.info(f"Log file {log_file_path} successfully uploaded to {destination_path}.")
+            print(f"Log file {log_file_path} successfully uploaded to {destination_path}.")
             # 标记日志已成功上传
             mark_as_synced(log_file_path)
             break  # 上传成功，退出重试循环
