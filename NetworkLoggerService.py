@@ -30,7 +30,7 @@ MAX_LOG_RETENTION_DAYS = 7  # 日志保留的天数
 LOG_LOCK = Lock()  # 用于线程安全的日志操作
 
 # 网络共享路径（注意双斜杠）
-SHARED_FOLDER_PATH = r"\\ServerName\SharedFolder"  # 共享文件夹的路径
+SHARED_FOLDER_PATH = r"\\SERVERF10\NetLogs"  # 共享文件夹的路径
 
 # 队列
 queue = Queue(maxsize=100)  # 数据包处理队列，限制队列的大小，避免内存过载
@@ -232,6 +232,8 @@ def upload_with_retry(log_file_path):
             if attempt < UPLOAD_RETRY_LIMIT:
                 time.sleep(delay)  # 延迟上传重试
                 delay *= 2  # 指数增加重试间隔时间
+
+
     current_uploads -= 1  # 上传结束后，减少当前上传数
 
 
