@@ -1,5 +1,3 @@
-import sys
-
 import win32serviceutil
 import win32service
 import win32event
@@ -19,7 +17,7 @@ from scapy.all import sniff, IP, TCP, UDP
 
 # 基本配置
 LOG_DIR = "C:\\netLogs\\"  # 日志存储目录
-MAX_LOG_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_LOG_SIZE = 5 * 1024 * 1024  # 5MB
 LOG_EXTENSION = ".log"
 COMPRESSED_EXTENSION = ".zip"
 UPLOAD_RETRY_LIMIT = 3  # 上传失败时的重试次数
@@ -32,13 +30,15 @@ MAX_LOG_RETENTION_DAYS = 7  # 日志保留的天数
 LOG_LOCK = Lock()  # 用于线程安全的日志操作
 
 # 网络共享路径（注意双斜杠）
-SHARED_FOLDER_PATH = r"\\SERVERF10\NetLogs"  # 共享文件夹的路径
+SHARED_FOLDER_PATH = r"\\ServerName\SharedFolder"  # 共享文件夹的路径
 
 # 队列
 queue = Queue(maxsize=100)  # 数据包处理队列，限制队列的大小，避免内存过载
 upload_queue = Queue(maxsize=UPLOAD_QUEUE_MAXSIZE)  # 上传队列
 stop_event = Event()  # 用于控制服务停止的事件
 current_uploads = 0  # 记录当前正在进行的上传任务数量
+
+logger = logging.getLogger()  # 全局日志对象
 
 
 # 获取当前终端名称
@@ -68,6 +68,24 @@ def get_log_file_path():
 
     log_file_path = os.path.join(folder_path, f"logfile_{current_hour}{LOG_EXTENSION}")
     return log_file_path
+
+
+# 强制创建新的日志文件
+def create_new_log_file():
+    global logger
+    log_file_path = get_log_file_path()
+
+    # 关闭现有日志处理器
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+        handler.close()
+
+    # 创建新日志文件
+    handler = CompressingRotatingFileHandler(log_file_path, maxBytes=MAX_LOG_SIZE, backupCount=5)
+    formatter = logging.Formatter('%(asctime)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logging.info("New hourly log file created.")  # 记录日志文件重启
 
 
 # 压缩文件
@@ -109,16 +127,7 @@ class CompressingRotatingFileHandler(RotatingFileHandler):
 
 # 配置日志格式（使用日志轮转和压缩）
 def configure_logging():
-    log_file_path = get_log_file_path()
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-
-    handler = CompressingRotatingFileHandler(log_file_path, maxBytes=MAX_LOG_SIZE, backupCount=5)
-    formatter = logging.Formatter('%(asctime)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-
-    return log_file_path
+    create_new_log_file()  # 创建新的日志文件
 
 
 # 捕获并处理数据包，使用队列传递数据
@@ -214,7 +223,6 @@ def upload_with_retry(log_file_path):
             # 复制日志文件到共享文件夹
             shutil.copy(log_file_path, destination_path)
             logging.info(f"Log file {log_file_path} successfully uploaded to {destination_path}.")
-            print(f"Log file {log_file_path} successfully uploaded to {destination_path}.")
             # 标记日志已成功上传
             mark_as_synced(log_file_path)
             break  # 上传成功，退出重试循环
@@ -226,6 +234,7 @@ def upload_with_retry(log_file_path):
                 delay *= 2  # 指数增加重试间隔时间
     current_uploads -= 1  # 上传结束后，减少当前上传数
 
+
 # 标记文件为已上传的函数（防止重复上传）
 def mark_as_synced(file_path):
     synced_marker = file_path + ".synced"
@@ -233,9 +242,11 @@ def mark_as_synced(file_path):
         f.write("synced")
     logging.info(f"Marked {file_path} as synced.")
 
+
 # 检查日志是否已上传
 def is_file_synced(file_path):
     return os.path.exists(file_path + ".synced")
+
 
 # 异步上传处理器，将未上传的日志文件添加到上传队列中
 def async_upload_log(log_file_path):
@@ -247,6 +258,7 @@ def async_upload_log(log_file_path):
             logging.warning("Upload queue is full. Dropping log file upload request.")
     else:
         logging.info(f"Log file {log_file_path} has already been uploaded. Skipping.")
+
 
 # 上传日志文件的线程
 def upload_worker():
@@ -263,12 +275,31 @@ def upload_worker():
         except Empty:
             continue
 
+
 # 启动异步上传线程池
 def start_upload_threads():
     for _ in range(UPLOAD_THREAD_COUNT):
         upload_thread = Thread(target=upload_worker)
         upload_thread.daemon = True  # 设置为守护线程，在主线程退出时自动终止
         upload_thread.start()
+
+
+# 清理过期日志文件
+def clean_old_logs():
+    current_time = time.time()
+    for folder in os.listdir(LOG_DIR):
+        folder_path = os.path.join(LOG_DIR, folder)
+        if os.path.isdir(folder_path):
+            for file in os.listdir(folder_path):
+                file_path = os.path.join(folder_path, file)
+                file_time = os.path.getmtime(file_path)
+                if (current_time - file_time) // (24 * 3600) >= MAX_LOG_RETENTION_DAYS:
+                    try:
+                        os.remove(file_path)
+                        logging.info(f"Deleted old log file: {file_path}")
+                    except Exception as e:
+                        logging.error(f"Failed to delete {file_path}: {e}")
+
 
 # Windows 服务类
 class NetworkLoggerService(win32serviceutil.ServiceFramework):
@@ -309,8 +340,9 @@ class NetworkLoggerService(win32serviceutil.ServiceFramework):
         capture_thread.daemon = True
         capture_thread.start()
 
-        # 调度任务，定期清理日志和上传
+        # 调度任务，定期清理日志和每小时生成新的日志文件
         schedule.every(10).minutes.do(lambda: async_upload_log(get_log_file_path()))  # 每10分钟异步上传日志文件
+        schedule.every().hour.do(create_new_log_file)  # 每小时创建新的日志文件
         schedule.every(24).hours.do(clean_old_logs)  # 每24小时清理一次旧日志
 
         while not stop_event.is_set():
@@ -319,6 +351,7 @@ class NetworkLoggerService(win32serviceutil.ServiceFramework):
 
         # 等待线程完成
         queue.join()
+
 
 if __name__ == '__main__':
     if len(sys.argv) == 1:
