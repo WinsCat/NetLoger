@@ -69,7 +69,7 @@ def get_log_file_path():
     return log_file_path
 
 
-# 压缩文件，文件名中加入时间戳防止覆盖
+# 压缩文件，文件名中加入时间戳防止覆盖，并在压缩后上传文件
 def compress_file(file_path):
     timestamp = time.strftime('%Y%m%d_%H%M%S')  # 获取当前时间戳
     compressed_file = file_path + f"_{timestamp}" + COMPRESSED_EXTENSION  # 添加时间戳到文件名中
@@ -77,6 +77,9 @@ def compress_file(file_path):
         zipf.write(file_path, os.path.basename(file_path))
     os.remove(file_path)
     logging.info(f"Log file {file_path} compressed to {compressed_file}")
+
+    # 压缩完成后，将压缩文件加入上传队列
+    async_upload_log(compressed_file)
 
 
 # 清理过期日志文件
@@ -104,7 +107,7 @@ class CompressingRotatingFileHandler(RotatingFileHandler):
             for i in range(self.backupCount, 0, -1):
                 log_file = f"{self.baseFilename}.{i}"
                 if os.path.exists(log_file):
-                    compress_file(log_file)
+                    compress_file(log_file)  # 压缩完成后上传
 
 
 # 配置日志格式（使用日志轮转和压缩）
@@ -195,7 +198,7 @@ def capture_all_ports():
         sniff(filter="tcp or udp", prn=packet_callback, store=0, count=100, stop_filter=lambda x: stop_event.is_set())
 
 
-# 上传日志文件，并在失败时重试
+# 上传日志文件，并在失败时重试，上传成功后删除本地文件
 def upload_with_retry(log_file_path):
     global current_uploads
     folder_path, log_filename = os.path.split(log_file_path)
@@ -211,20 +214,25 @@ def upload_with_retry(log_file_path):
 
     while attempt < UPLOAD_RETRY_LIMIT:
         try:
-            # 复制日志文件到共享文件夹
+            # 复制压缩后的日志文件到共享文件夹
             shutil.copy(log_file_path, destination_path)
-            logging.info(f"Log file {log_file_path} successfully uploaded to {destination_path}.")
-            print(f"Log file {log_file_path} successfully uploaded to {destination_path}.")
+            logging.info(f"Compressed log file {log_file_path} successfully uploaded to {destination_path}.")
+            print(f"Compressed log file {log_file_path} successfully uploaded to {destination_path}.")
             # 标记日志已成功上传
             mark_as_synced(log_file_path)
+            # 上传成功后删除本地压缩文件
+            os.remove(log_file_path)
+            logging.info(f"Local compressed log file {log_file_path} deleted after successful upload.")
             break  # 上传成功，退出重试循环
         except Exception as e:
             attempt += 1
-            logging.error(f"Failed to upload log file {log_file_path} (Attempt {attempt}/{UPLOAD_RETRY_LIMIT}): {e}")
+            logging.error(
+                f"Failed to upload compressed log file {log_file_path} (Attempt {attempt}/{UPLOAD_RETRY_LIMIT}): {e}")
             if attempt < UPLOAD_RETRY_LIMIT:
                 time.sleep(delay)  # 延迟上传重试
                 delay *= 2  # 指数增加重试间隔时间
     current_uploads -= 1  # 上传结束后，减少当前上传数
+
 
 # 标记文件为已上传的函数（防止重复上传）
 def mark_as_synced(file_path):
@@ -233,20 +241,23 @@ def mark_as_synced(file_path):
         f.write("synced")
     logging.info(f"Marked {file_path} as synced.")
 
+
 # 检查日志是否已上传
 def is_file_synced(file_path):
     return os.path.exists(file_path + ".synced")
+
 
 # 异步上传处理器，将未上传的日志文件添加到上传队列中
 def async_upload_log(log_file_path):
     if not is_file_synced(log_file_path):  # 检查文件是否已经上传
         try:
             upload_queue.put_nowait(log_file_path)  # 将要上传的文件路径放入上传队列
-            logging.info(f"Log file {log_file_path} added to upload queue.")
+            logging.info(f"Compressed log file {log_file_path} added to upload queue.")
         except Full:
             logging.warning("Upload queue is full. Dropping log file upload request.")
     else:
-        logging.info(f"Log file {log_file_path} has already been uploaded. Skipping.")
+        logging.info(f"Compressed log file {log_file_path} has already been uploaded. Skipping.")
+
 
 # 上传日志文件的线程
 def upload_worker():
@@ -263,12 +274,14 @@ def upload_worker():
         except Empty:
             continue
 
+
 # 启动异步上传线程池
 def start_upload_threads():
     for _ in range(UPLOAD_THREAD_COUNT):
         upload_thread = Thread(target=upload_worker)
         upload_thread.daemon = True  # 设置为守护线程，在主线程退出时自动终止
         upload_thread.start()
+
 
 # 清理过期日志文件
 def clean_old_logs():
@@ -285,6 +298,7 @@ def clean_old_logs():
                         logging.info(f"Deleted old log file: {file_path}")
                     except Exception as e:
                         logging.error(f"Failed to delete {file_path}: {e}")
+
 
 # Windows 服务类
 class NetworkLoggerService(win32serviceutil.ServiceFramework):
@@ -336,6 +350,7 @@ class NetworkLoggerService(win32serviceutil.ServiceFramework):
         # 等待线程完成
         queue.join()
 
+
 if __name__ == '__main__':
     if len(sys.argv) == 1:
         try:
@@ -347,6 +362,7 @@ if __name__ == '__main__':
             servicemanager.StartServiceCtrlDispatcher()
         except win32service.error as details:
             import winerror
+
             if details == winerror.ERROR_FAILED_SERVICE_CONTROLLER_CONNECT:
                 win32serviceutil.usage()
     else:
