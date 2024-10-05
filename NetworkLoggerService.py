@@ -19,7 +19,7 @@ from scapy.all import sniff, IP, TCP, UDP
 
 # 基本配置
 LOG_DIR = "C:\\netLogs\\"  # 日志存储目录
-MAX_LOG_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_LOG_SIZE = 5 * 1024 * 1024  # 5MB
 LOG_EXTENSION = ".log"
 COMPRESSED_EXTENSION = ".zip"
 UPLOAD_RETRY_LIMIT = 3  # 上传失败时的重试次数
@@ -32,7 +32,7 @@ MAX_LOG_RETENTION_DAYS = 7  # 日志保留的天数
 LOG_LOCK = Lock()  # 用于线程安全的日志操作
 
 # 网络共享路径（注意双斜杠）
-SHARED_FOLDER_PATH = r"\\SERVERF10\NetLogs"  # 共享文件夹的路径
+SHARED_FOLDER_PATH = r"\\SERVERF10\\NetLogs"  # 共享文件夹的路径
 
 # 队列
 queue = Queue(maxsize=100)  # 数据包处理队列，限制队列的大小，避免内存过载
