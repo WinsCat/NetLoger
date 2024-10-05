@@ -1,5 +1,4 @@
 import sys
-
 import win32serviceutil
 import win32service
 import win32event
@@ -32,7 +31,7 @@ MAX_LOG_RETENTION_DAYS = 7  # 日志保留的天数
 LOG_LOCK = Lock()  # 用于线程安全的日志操作
 
 # 网络共享路径（注意双斜杠）
-SHARED_FOLDER_PATH = r"\\SERVERF10\\NetLogs"  # 共享文件夹的路径
+SHARED_FOLDER_PATH = r"\\SERVERF10\NetLogs"  # 共享文件夹的路径
 
 # 队列
 queue = Queue(maxsize=100)  # 数据包处理队列，限制队列的大小，避免内存过载
@@ -70,9 +69,10 @@ def get_log_file_path():
     return log_file_path
 
 
-# 压缩文件
+# 压缩文件，文件名中加入时间戳防止覆盖
 def compress_file(file_path):
-    compressed_file = file_path + COMPRESSED_EXTENSION
+    timestamp = time.strftime('%Y%m%d_%H%M%S')  # 获取当前时间戳
+    compressed_file = file_path + f"_{timestamp}" + COMPRESSED_EXTENSION  # 添加时间戳到文件名中
     with zipfile.ZipFile(compressed_file, 'w', zipfile.ZIP_DEFLATED) as zipf:
         zipf.write(file_path, os.path.basename(file_path))
     os.remove(file_path)
@@ -96,7 +96,7 @@ def clean_old_logs():
                         logging.error(f"Failed to delete {file_path}: {e}")
 
 
-# 自定义日志轮转处理器
+# 自定义日志轮转处理器，自动压缩旧文件
 class CompressingRotatingFileHandler(RotatingFileHandler):
     def doRollover(self):
         super().doRollover()  # 调用父类方法进行日志轮转
@@ -270,6 +270,22 @@ def start_upload_threads():
         upload_thread.daemon = True  # 设置为守护线程，在主线程退出时自动终止
         upload_thread.start()
 
+# 清理过期日志文件
+def clean_old_logs():
+    current_time = time.time()
+    for folder in os.listdir(LOG_DIR):
+        folder_path = os.path.join(LOG_DIR, folder)
+        if os.path.isdir(folder_path):
+            for file in os.listdir(folder_path):
+                file_path = os.path.join(folder_path, file)
+                file_time = os.path.getmtime(file_path)
+                if (current_time - file_time) // (24 * 3600) >= MAX_LOG_RETENTION_DAYS:
+                    try:
+                        os.remove(file_path)
+                        logging.info(f"Deleted old log file: {file_path}")
+                    except Exception as e:
+                        logging.error(f"Failed to delete {file_path}: {e}")
+
 # Windows 服务类
 class NetworkLoggerService(win32serviceutil.ServiceFramework):
     _svc_name_ = "NetworkLoggerService"
@@ -331,7 +347,6 @@ if __name__ == '__main__':
             servicemanager.StartServiceCtrlDispatcher()
         except win32service.error as details:
             import winerror
-
             if details == winerror.ERROR_FAILED_SERVICE_CONTROLLER_CONNECT:
                 win32serviceutil.usage()
     else:
