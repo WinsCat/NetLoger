@@ -7,18 +7,16 @@ import logging
 import os
 import time
 import shutil
-import stat
+import zipfile
 import schedule
 import socket  # 用于获取终端名称
-import zipfile
 from threading import Thread, Event, Lock
 from queue import Queue, Empty, Full
-from logging.handlers import RotatingFileHandler
+from logging.handlers import TimedRotatingFileHandler
 from scapy.all import sniff, IP, TCP, UDP
 
 # 基本配置
 LOG_DIR = "C:\\netLogs\\"  # 日志存储目录
-MAX_LOG_SIZE = 5 * 1024 * 1024  # 5MB
 LOG_EXTENSION = ".log"
 COMPRESSED_EXTENSION = ".zip"
 UPLOAD_RETRY_LIMIT = 3  # 上传失败时的重试次数
@@ -58,15 +56,13 @@ def set_admin_only_permissions(folder_path):
 # 按天创建文件夹，按小时创建日志文件
 def get_log_file_path():
     current_day = time.strftime('%Y-%m-%d')  # 生成当天日期的字符串
-    current_hour = time.strftime('%H')  # 获取当前小时
     folder_path = os.path.join(LOG_DIR, current_day)
 
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)  # 如果文件夹不存在则创建
         set_admin_only_permissions(folder_path)  # 设置目录权限为管理员可访问
 
-    log_file_path = os.path.join(folder_path, f"logfile_{current_hour}{LOG_EXTENSION}")
-    return log_file_path
+    return folder_path
 
 
 # 压缩文件，文件名中加入时间戳防止覆盖，并在压缩后上传文件
@@ -100,7 +96,7 @@ def clean_old_logs():
 
 
 # 自定义日志轮转处理器，自动压缩旧文件
-class CompressingRotatingFileHandler(RotatingFileHandler):
+class CompressingTimedRotatingFileHandler(TimedRotatingFileHandler):
     def doRollover(self):
         super().doRollover()  # 调用父类方法进行日志轮转
         with LOG_LOCK:  # 保护日志轮转过程
@@ -110,13 +106,15 @@ class CompressingRotatingFileHandler(RotatingFileHandler):
                     compress_file(log_file)  # 压缩完成后上传
 
 
-# 配置日志格式（使用日志轮转和压缩）
+# 配置日志格式（每小时生成新的日志文件）
 def configure_logging():
-    log_file_path = get_log_file_path()
+    log_folder_path = get_log_file_path()
+    log_file_path = os.path.join(log_folder_path, f"logfile{LOG_EXTENSION}")
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
 
-    handler = CompressingRotatingFileHandler(log_file_path, maxBytes=MAX_LOG_SIZE, backupCount=5)
+    # 使用TimedRotatingFileHandler按小时轮转
+    handler = CompressingTimedRotatingFileHandler(log_file_path, when="H", interval=1, backupCount=24)
     formatter = logging.Formatter('%(asctime)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
     handler.setFormatter(formatter)
     logger.addHandler(handler)
@@ -197,7 +195,6 @@ def capture_all_ports():
     while not stop_event.is_set():
         sniff(filter="tcp or udp", prn=packet_callback, store=0, count=100, stop_filter=lambda x: stop_event.is_set())
 
-
 # 上传日志文件，并在失败时重试，上传成功后删除本地文件
 def upload_with_retry(log_file_path):
     global current_uploads
@@ -226,13 +223,11 @@ def upload_with_retry(log_file_path):
             break  # 上传成功，退出重试循环
         except Exception as e:
             attempt += 1
-            logging.error(
-                f"Failed to upload compressed log file {log_file_path} (Attempt {attempt}/{UPLOAD_RETRY_LIMIT}): {e}")
+            logging.error(f"Failed to upload compressed log file {log_file_path} (Attempt {attempt}/{UPLOAD_RETRY_LIMIT}): {e}")
             if attempt < UPLOAD_RETRY_LIMIT:
                 time.sleep(delay)  # 延迟上传重试
                 delay *= 2  # 指数增加重试间隔时间
     current_uploads -= 1  # 上传结束后，减少当前上传数
-
 
 # 标记文件为已上传的函数（防止重复上传）
 def mark_as_synced(file_path):
@@ -241,11 +236,9 @@ def mark_as_synced(file_path):
         f.write("synced")
     logging.info(f"Marked {file_path} as synced.")
 
-
 # 检查日志是否已上传
 def is_file_synced(file_path):
     return os.path.exists(file_path + ".synced")
-
 
 # 异步上传处理器，将未上传的日志文件添加到上传队列中
 def async_upload_log(log_file_path):
@@ -257,7 +250,6 @@ def async_upload_log(log_file_path):
             logging.warning("Upload queue is full. Dropping log file upload request.")
     else:
         logging.info(f"Compressed log file {log_file_path} has already been uploaded. Skipping.")
-
 
 # 上传日志文件的线程
 def upload_worker():
@@ -274,14 +266,12 @@ def upload_worker():
         except Empty:
             continue
 
-
 # 启动异步上传线程池
 def start_upload_threads():
     for _ in range(UPLOAD_THREAD_COUNT):
         upload_thread = Thread(target=upload_worker)
         upload_thread.daemon = True  # 设置为守护线程，在主线程退出时自动终止
         upload_thread.start()
-
 
 # 清理过期日志文件
 def clean_old_logs():
@@ -298,7 +288,6 @@ def clean_old_logs():
                         logging.info(f"Deleted old log file: {file_path}")
                     except Exception as e:
                         logging.error(f"Failed to delete {file_path}: {e}")
-
 
 # Windows 服务类
 class NetworkLoggerService(win32serviceutil.ServiceFramework):
@@ -350,7 +339,6 @@ class NetworkLoggerService(win32serviceutil.ServiceFramework):
         # 等待线程完成
         queue.join()
 
-
 if __name__ == '__main__':
     if len(sys.argv) == 1:
         try:
@@ -362,7 +350,6 @@ if __name__ == '__main__':
             servicemanager.StartServiceCtrlDispatcher()
         except win32service.error as details:
             import winerror
-
             if details == winerror.ERROR_FAILED_SERVICE_CONTROLLER_CONNECT:
                 win32serviceutil.usage()
     else:
