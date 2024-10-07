@@ -273,21 +273,6 @@ def start_upload_threads():
         upload_thread.daemon = True  # 设置为守护线程，在主线程退出时自动终止
         upload_thread.start()
 
-# 清理过期日志文件
-def clean_old_logs():
-    current_time = time.time()
-    for folder in os.listdir(LOG_DIR):
-        folder_path = os.path.join(LOG_DIR, folder)
-        if os.path.isdir(folder_path):
-            for file in os.listdir(folder_path):
-                file_path = os.path.join(folder_path, file)
-                file_time = os.path.getmtime(file_path)
-                if (current_time - file_time) // (24 * 3600) >= MAX_LOG_RETENTION_DAYS:
-                    try:
-                        os.remove(file_path)
-                        logging.info(f"Deleted old log file: {file_path}")
-                    except Exception as e:
-                        logging.error(f"Failed to delete {file_path}: {e}")
 
 # Windows 服务类
 class NetworkLoggerService(win32serviceutil.ServiceFramework):
