@@ -8,7 +8,7 @@ import os
 import time
 import shutil
 import zipfile
-import schedule
+import schedule # 计划任务
 import socket  # 用于获取终端名称
 from threading import Thread, Event, Lock
 from queue import Queue, Empty, Full
