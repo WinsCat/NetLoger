@@ -80,6 +80,23 @@ def compress_file(file_path):
     async_upload_log(compressed_file)
 
 
+# 清理过期日志文件
+def clean_old_logs():
+    current_time = time.time()
+    for folder in os.listdir(LOG_DIR):
+        folder_path = os.path.join(LOG_DIR, folder)
+        if os.path.isdir(folder_path):
+            for file in os.listdir(folder_path):
+                file_path = os.path.join(folder_path, file)
+                file_time = os.path.getmtime(file_path)
+                if (current_time - file_time) // (24 * 3600) >= MAX_LOG_RETENTION_DAYS:
+                    try:
+                        os.remove(file_path)
+                        logging.info(f"Deleted old log file: {file_path}")
+                    except Exception as e:
+                        logging.error(f"Failed to delete {file_path}: {e}")
+
+
 # 自定义日志轮转处理器，自动压缩旧文件
 class CompressingTimedRotatingFileHandler(TimedRotatingFileHandler):
     def doRollover(self):
@@ -201,7 +218,7 @@ def create_ftp_directory(ftp, path):
 def upload_with_retry(log_file_path):
     global current_uploads
     attempt = 0
-    delay = UPLOAD_RETRY_DELAY
+    delay    = UPLOAD_RETRY_DELAY
     terminal_name = get_terminal_name()  # 获取终端名称
     file_name = os.path.basename(log_file_path)
     remote_dir = os.path.join(FTP_REMOTE_DIR, terminal_name)
@@ -228,14 +245,12 @@ def upload_with_retry(log_file_path):
 
         except Exception as e:
             attempt += 1
-            logging.error(
-                f"Failed to upload compressed log file {log_file_path} (Attempt {attempt}/{UPLOAD_RETRY_LIMIT}): {e}")
+            logging.error(f"Failed to upload compressed log file {log_file_path} (Attempt {attempt}/{UPLOAD_RETRY_LIMIT}): {e}")
             if attempt < UPLOAD_RETRY_LIMIT:
                 time.sleep(delay)  # 延迟上传重试
                 delay *= 2  # 指数增加重试间隔时间
 
     current_uploads -= 1  # 上传结束后，减少当前上传数
-
 
 # 标记文件为已上传的函数（防止重复上传）
 def mark_as_synced(file_path):
@@ -244,11 +259,9 @@ def mark_as_synced(file_path):
         f.write("synced")
     logging.info(f"Marked {file_path} as synced.")
 
-
 # 检查日志是否已上传
 def is_file_synced(file_path):
     return os.path.exists(file_path + ".synced")
-
 
 # 异步上传处理器，将未上传的日志文件添加到上传队列中
 def async_upload_log(log_file_path):
@@ -260,7 +273,6 @@ def async_upload_log(log_file_path):
             logging.warning("Upload queue is full. Dropping log file upload request.")
     else:
         logging.info(f"Compressed log file {log_file_path} has already been uploaded. Skipping.")
-
 
 # 上传日志文件的线程
 def upload_worker():
@@ -277,14 +289,12 @@ def upload_worker():
         except Empty:
             continue
 
-
 # 启动异步上传线程池
 def start_upload_threads():
     for _ in range(UPLOAD_THREAD_COUNT):
         upload_thread = Thread(target=upload_worker)
         upload_thread.daemon = True  # 设置为守护线程，在主线程退出时自动终止
         upload_thread.start()
-
 
 # 清理过期日志文件
 def clean_old_logs():
@@ -301,7 +311,6 @@ def clean_old_logs():
                         logging.info(f"Deleted old log file: {file_path}")
                     except Exception as e:
                         logging.error(f"Failed to delete {file_path}: {e}")
-
 
 # Windows 服务类
 class NetworkLoggerService(win32serviceutil.ServiceFramework):
@@ -353,7 +362,6 @@ class NetworkLoggerService(win32serviceutil.ServiceFramework):
         # 等待线程完成
         queue.join()
 
-
 if __name__ == '__main__':
     if len(sys.argv) == 1:
         try:
@@ -365,7 +373,6 @@ if __name__ == '__main__':
             servicemanager.StartServiceCtrlDispatcher()
         except win32service.error as details:
             import winerror
-
             if details == winerror.ERROR_FAILED_SERVICE_CONTROLLER_CONNECT:
                 win32serviceutil.usage()
     else:
