@@ -14,11 +14,16 @@ from threading import Thread, Event, Lock
 from queue import Queue, Empty, Full
 from logging.handlers import TimedRotatingFileHandler
 from scapy.all import sniff, IP, TCP, UDP
+from ftplib import FTP  # FTP 库
 
 # 基本配置
 LOG_DIR = "C:\\netLogs\\"  # 日志存储目录
 LOG_EXTENSION = ".log"
 COMPRESSED_EXTENSION = ".zip"
+FTP_SERVER = "192.168.110.166"
+FTP_USER = "Wins"
+FTP_PASSWORD = "Ronghui123"
+FTP_REMOTE_DIR = "/logs/"
 UPLOAD_RETRY_LIMIT = 3  # 上传失败时的重试次数
 UPLOAD_RETRY_DELAY = 5  # 每次重试的初始延迟时间（秒）
 UPLOAD_QUEUE_MAXSIZE = 20  # 上传队列的最大长度
@@ -27,9 +32,6 @@ BATCH_SIZE = 10  # 每次批量处理的包数量
 MAX_CONCURRENT_UPLOADS = 4  # 最大同时并发上传数量
 MAX_LOG_RETENTION_DAYS = 7  # 日志保留的天数
 LOG_LOCK = Lock()  # 用于线程安全的日志操作
-
-# 网络共享路径（注意双斜杠）
-SHARED_FOLDER_PATH = r"\\SERVERF10\NetLogs"  # 共享文件夹的路径
 
 # 队列
 queue = Queue(maxsize=100)  # 数据包处理队列，限制队列的大小，避免内存过载
@@ -195,38 +197,58 @@ def capture_all_ports():
     while not stop_event.is_set():
         sniff(filter="tcp or udp", prn=packet_callback, store=0, count=100, stop_filter=lambda x: stop_event.is_set())
 
+
+# 在 FTP 服务器上创建目录（如果不存在）
+def create_ftp_directory(ftp, path):
+    dirs = path.split('/')
+    current_dir = ''
+    for directory in dirs:
+        if directory:
+            current_dir += f'/{directory}'
+            try:
+                ftp.cwd(current_dir)  # 尝试切换到目录，如果不存在则会抛出异常
+            except Exception:
+                # 如果目录不存在，则创建目录并进入该目录
+                ftp.mkd(current_dir)
+                ftp.cwd(current_dir)
+                logging.info(f"Created FTP directory: {current_dir}")
+
 # 上传日志文件，并在失败时重试，上传成功后删除本地文件
 def upload_with_retry(log_file_path):
     global current_uploads
-    folder_path, log_filename = os.path.split(log_file_path)
-    terminal_name = get_terminal_name()  # 获取终端名称
-    # 上传路径为服务器共享文件夹，包含终端名称的路径
-    destination_path = os.path.join(SHARED_FOLDER_PATH, terminal_name, folder_path)  # 包含终端名称的路径
-
-    if not os.path.exists(destination_path):
-        os.makedirs(destination_path)
-
     attempt = 0
     delay = UPLOAD_RETRY_DELAY
+    terminal_name = get_terminal_name()  # 获取终端名称
+    file_name = os.path.basename(log_file_path)
+    remote_dir = os.path.join(FTP_REMOTE_DIR, terminal_name)
 
     while attempt < UPLOAD_RETRY_LIMIT:
         try:
-            # 复制压缩后的日志文件到共享文件夹
-            shutil.copy(log_file_path, destination_path)
-            logging.info(f"Compressed log file {log_file_path} successfully uploaded to {destination_path}.")
-            print(f"Compressed log file {log_file_path} successfully uploaded to {destination_path}.")
-            # 标记日志已成功上传
-            mark_as_synced(log_file_path)
-            # 上传成功后删除本地压缩文件
-            os.remove(log_file_path)
-            logging.info(f"Local compressed log file {log_file_path} deleted after successful upload.")
-            break  # 上传成功，退出重试循环
+            # 连接FTP服务器
+            with FTP(FTP_SERVER) as ftp:
+                ftp.login(user=FTP_USER, passwd=FTP_PASSWORD)
+
+                # 确保远程目录存在，如果不存在则创建
+                create_ftp_directory(ftp, remote_dir)
+
+                # 上传日志文件
+                with open(log_file_path, 'rb') as f:
+                    ftp.storbinary(f'STOR {file_name}', f)
+                logging.info(f"Log file {log_file_path} successfully uploaded to FTP at {remote_dir}.")
+                print(f"Log file {log_file_path} successfully uploaded to FTP at {remote_dir}.")
+
+                # 上传成功后删除本地文件
+                os.remove(log_file_path)
+                logging.info(f"Local compressed log file {log_file_path} deleted after successful upload.")
+                break  # 上传成功，退出重试循环
+
         except Exception as e:
             attempt += 1
             logging.error(f"Failed to upload compressed log file {log_file_path} (Attempt {attempt}/{UPLOAD_RETRY_LIMIT}): {e}")
             if attempt < UPLOAD_RETRY_LIMIT:
                 time.sleep(delay)  # 延迟上传重试
                 delay *= 2  # 指数增加重试间隔时间
+
     current_uploads -= 1  # 上传结束后，减少当前上传数
 
 # 标记文件为已上传的函数（防止重复上传）
@@ -273,6 +295,21 @@ def start_upload_threads():
         upload_thread.daemon = True  # 设置为守护线程，在主线程退出时自动终止
         upload_thread.start()
 
+# 清理过期日志文件
+def clean_old_logs():
+    current_time = time.time()
+    for folder in os.listdir(LOG_DIR):
+        folder_path = os.path.join(LOG_DIR, folder)
+        if os.path.isdir(folder_path):
+            for file in os.listdir(folder_path):
+                file_path = os.path.join(folder_path, file)
+                file_time = os.path.getmtime(file_path)
+                if (current_time - file_time) // (24 * 3600) >= MAX_LOG_RETENTION_DAYS:
+                    try:
+                        os.remove(file_path)
+                        logging.info(f"Deleted old log file: {file_path}")
+                    except Exception as e:
+                        logging.error(f"Failed to delete {file_path}: {e}")
 
 # Windows 服务类
 class NetworkLoggerService(win32serviceutil.ServiceFramework):
