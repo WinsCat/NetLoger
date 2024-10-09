@@ -14,16 +14,11 @@ from threading import Thread, Event, Lock
 from queue import Queue, Empty, Full
 from logging.handlers import TimedRotatingFileHandler
 from scapy.all import sniff, IP, TCP, UDP
-from ftplib import FTP  # FTP 库
 
 # 基本配置
 LOG_DIR = "C:\\netLogs\\"  # 日志存储目录
 LOG_EXTENSION = ".log"
 COMPRESSED_EXTENSION = ".zip"
-FTP_SERVER = "192.168.110.166"
-FTP_USER = "Wins"
-FTP_PASSWORD = "Ronghui123"
-FTP_REMOTE_DIR = "/logs/"
 UPLOAD_RETRY_LIMIT = 3  # 上传失败时的重试次数
 UPLOAD_RETRY_DELAY = 5  # 每次重试的初始延迟时间（秒）
 UPLOAD_QUEUE_MAXSIZE = 20  # 上传队列的最大长度
@@ -32,6 +27,9 @@ BATCH_SIZE = 10  # 每次批量处理的包数量
 MAX_CONCURRENT_UPLOADS = 4  # 最大同时并发上传数量
 MAX_LOG_RETENTION_DAYS = 7  # 日志保留的天数
 LOG_LOCK = Lock()  # 用于线程安全的日志操作
+
+# 网络共享路径（注意双斜杠）
+SHARED_FOLDER_PATH = r"\\SERVERF10\NetLogs"  # 共享文件夹的路径
 
 # 队列
 queue = Queue(maxsize=100)  # 数据包处理队列，限制队列的大小，避免内存过载
@@ -56,15 +54,18 @@ def set_admin_only_permissions(folder_path):
 
 
 # 按天创建文件夹，按小时创建日志文件
-def get_log_file_path():
-    current_day = time.strftime('%Y-%m-%d')  # 生成当天日期的字符串
-    folder_path = os.path.join(LOG_DIR, current_day)
+def get_log_file_path(current_day=None):
+    new_day = time.strftime('%Y-%m-%d')  # 获取当前日期
+    if current_day is None or current_day != new_day:
+        current_day = new_day
+        folder_path = os.path.join(LOG_DIR, current_day)
 
-    if not os.path.exists(folder_path):
-        os.makedirs(folder_path)  # 如果文件夹不存在则创建
-        set_admin_only_permissions(folder_path)  # 设置目录权限为管理员可访问
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path)  # 如果文件夹不存在则创建
+            set_admin_only_permissions(folder_path)  # 设置目录权限为管理员可访问
+        return folder_path, current_day
 
-    return folder_path
+    return os.path.join(LOG_DIR, current_day), current_day
 
 
 # 压缩文件，文件名中加入时间戳防止覆盖，并在压缩后上传文件
@@ -80,6 +81,23 @@ def compress_file(file_path):
     async_upload_log(compressed_file)
 
 
+# 清理过期日志文件
+def clean_old_logs():
+    current_time = time.time()
+    for folder in os.listdir(LOG_DIR):
+        folder_path = os.path.join(LOG_DIR, folder)
+        if os.path.isdir(folder_path):
+            for file in os.listdir(folder_path):
+                file_path = os.path.join(folder_path, file)
+                file_time = os.path.getmtime(file_path)
+                if (current_time - file_time) // (24 * 3600) >= MAX_LOG_RETENTION_DAYS:
+                    try:
+                        os.remove(file_path)
+                        logging.info(f"Deleted old log file: {file_path}")
+                    except Exception as e:
+                        logging.error(f"Failed to delete {file_path}: {e}")
+
+
 # 自定义日志轮转处理器，自动压缩旧文件
 class CompressingTimedRotatingFileHandler(TimedRotatingFileHandler):
     def doRollover(self):
@@ -93,8 +111,10 @@ class CompressingTimedRotatingFileHandler(TimedRotatingFileHandler):
 
 # 配置日志格式（每小时生成新的日志文件）
 def configure_logging():
-    log_folder_path = get_log_file_path()
+    current_day = None
+    log_folder_path, current_day = get_log_file_path(current_day)  # 获取当天的文件夹路径
     log_file_path = os.path.join(log_folder_path, f"logfile{LOG_EXTENSION}")
+
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
 
@@ -104,7 +124,7 @@ def configure_logging():
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
-    return log_file_path
+    return log_file_path, current_day
 
 
 # 捕获并处理数据包，使用队列传递数据
@@ -181,51 +201,32 @@ def capture_all_ports():
         sniff(filter="tcp or udp", prn=packet_callback, store=0, count=100, stop_filter=lambda x: stop_event.is_set())
 
 
-# 在 FTP 服务器上创建目录（如果不存在）
-def create_ftp_directory(ftp, path):
-    dirs = path.split('/')
-    current_dir = ''
-    for directory in dirs:
-        if directory:
-            current_dir += f'/{directory}'
-            try:
-                ftp.cwd(current_dir)  # 尝试切换到目录，如果不存在则会抛出异常
-            except Exception:
-                # 如果目录不存在，则创建目录并进入该目录
-                ftp.mkd(current_dir)
-                ftp.cwd(current_dir)
-                logging.info(f"Created FTP directory: {current_dir}")
-
-
 # 上传日志文件，并在失败时重试，上传成功后删除本地文件
 def upload_with_retry(log_file_path):
     global current_uploads
+    folder_path, log_filename = os.path.split(log_file_path)
+    terminal_name = get_terminal_name()  # 获取终端名称
+    # 上传路径为服务器共享文件夹，包含终端名称的路径
+    destination_path = os.path.join(SHARED_FOLDER_PATH, terminal_name, folder_path)  # 包含终端名称的路径
+
+    if not os.path.exists(destination_path):
+        os.makedirs(destination_path)
+
     attempt = 0
     delay = UPLOAD_RETRY_DELAY
-    terminal_name = get_terminal_name()  # 获取终端名称
-    file_name = os.path.basename(log_file_path)
-    remote_dir = os.path.join(FTP_REMOTE_DIR, terminal_name)
 
     while attempt < UPLOAD_RETRY_LIMIT:
         try:
-            # 连接FTP服务器
-            with FTP(FTP_SERVER) as ftp:
-                ftp.login(user=FTP_USER, passwd=FTP_PASSWORD)
-
-                # 确保远程目录存在，如果不存在则创建
-                create_ftp_directory(ftp, remote_dir)
-
-                # 上传日志文件
-                with open(log_file_path, 'rb') as f:
-                    ftp.storbinary(f'STOR {file_name}', f)
-                logging.info(f"Log file {log_file_path} successfully uploaded to FTP at {remote_dir}.")
-                print(f"Log file {log_file_path} successfully uploaded to FTP at {remote_dir}.")
-
-                # 上传成功后删除本地文件
-                os.remove(log_file_path)
-                logging.info(f"Local compressed log file {log_file_path} deleted after successful upload.")
-                break  # 上传成功，退出重试循环
-
+            # 复制压缩后的日志文件到共享文件夹
+            shutil.copy(log_file_path, destination_path)
+            logging.info(f"Compressed log file {log_file_path} successfully uploaded to {destination_path}.")
+            print(f"Compressed log file {log_file_path} successfully uploaded to {destination_path}.")
+            # 标记日志已成功上传
+            mark_as_synced(log_file_path)
+            # 上传成功后删除本地压缩文件
+            os.remove(log_file_path)
+            logging.info(f"Local compressed log file {log_file_path} deleted after successful upload.")
+            break  # 上传成功，退出重试循环
         except Exception as e:
             attempt += 1
             logging.error(
@@ -233,7 +234,6 @@ def upload_with_retry(log_file_path):
             if attempt < UPLOAD_RETRY_LIMIT:
                 time.sleep(delay)  # 延迟上传重试
                 delay *= 2  # 指数增加重试间隔时间
-
     current_uploads -= 1  # 上传结束后，减少当前上传数
 
 
@@ -286,23 +286,6 @@ def start_upload_threads():
         upload_thread.start()
 
 
-# 清理过期日志文件
-def clean_old_logs():
-    current_time = time.time()
-    for folder in os.listdir(LOG_DIR):
-        folder_path = os.path.join(LOG_DIR, folder)
-        if os.path.isdir(folder_path):
-            for file in os.listdir(folder_path):
-                file_path = os.path.join(folder_path, file)
-                file_time = os.path.getmtime(file_path)
-                if (current_time - file_time) // (24 * 3600) >= MAX_LOG_RETENTION_DAYS:
-                    try:
-                        os.remove(file_path)
-                        logging.info(f"Deleted old log file: {file_path}")
-                    except Exception as e:
-                        logging.error(f"Failed to delete {file_path}: {e}")
-
-
 # Windows 服务类
 class NetworkLoggerService(win32serviceutil.ServiceFramework):
     _svc_name_ = "NetworkLoggerService"
@@ -327,7 +310,7 @@ class NetworkLoggerService(win32serviceutil.ServiceFramework):
         self.main()
 
     def main(self):
-        configure_logging()
+        log_file_path, current_day = configure_logging()
 
         # 启动上传线程
         start_upload_threads()
@@ -343,11 +326,15 @@ class NetworkLoggerService(win32serviceutil.ServiceFramework):
         capture_thread.start()
 
         # 调度任务，定期清理日志和上传
-        schedule.every(10).minutes.do(lambda: async_upload_log(get_log_file_path()))  # 每10分钟异步上传日志文件
+        schedule.every(10).minutes.do(lambda: async_upload_log(log_file_path))  # 每10分钟异步上传日志文件
         schedule.every(24).hours.do(clean_old_logs)  # 每24小时清理一次旧日志
 
         while not stop_event.is_set():
             schedule.run_pending()
+            log_folder_path, new_day = get_log_file_path(current_day)  # 检查是否有新的一天
+            if new_day != current_day:
+                log_file_path, current_day = configure_logging()  # 新的一天重新配置日志
+
             time.sleep(5)  # 延长调度轮询时间，减少CPU占用
 
         # 等待线程完成
@@ -358,9 +345,7 @@ if __name__ == '__main__':
     if len(sys.argv) == 1:
         try:
             evtsrc_dll = os.path.abspath(servicemanager.__file__)
-            # 如果修改过名字，名字要统一
             servicemanager.PrepareToHostSingle(NetworkLoggerService)
-            # 如果修改过名字，名字要统一
             servicemanager.Initialize('NetworkLoggerService', evtsrc_dll)
             servicemanager.StartServiceCtrlDispatcher()
         except win32service.error as details:
