@@ -13,7 +13,7 @@ import win32service
 import win32event
 import servicemanager
 import socket
-from scapy.all import sniff, IP
+from scapy.all import sniff, IP, TCP, UDP
 from scapy.layers.http import HTTPRequest
 from datetime import datetime
 import os
@@ -73,27 +73,33 @@ class NetworkLogService(win32serviceutil.ServiceFramework):
         return None
 
     def packet_callback(self, packet):
-        """处理捕获的数据包"""
+        """处理捕获的数据包，记录IP、端口、URL、SNI信息"""
         if packet.haslayer(IP):
             ip_src = packet[IP].src
             ip_dst = packet[IP].dst
+
+            # 提取端口信息（TCP 或 UDP）
+            src_port = packet[TCP].sport if packet.haslayer(TCP) else (
+                packet[UDP].sport if packet.haslayer(UDP) else "Unknown")
+            dst_port = packet[TCP].dport if packet.haslayer(TCP) else (
+                packet[UDP].dport if packet.haslayer(UDP) else "Unknown")
 
             # 处理 HTTP 请求中的 URL
             url = self.extract_http_url(packet)
             if url:
                 self.log_file.write(
-                    f"Time: {datetime.now()}, Source IP: {ip_src}, Destination IP: {ip_dst}, URL: {url}\n")
+                    f"Time: {datetime.now()}, Source IP: {ip_src}:{src_port}, Destination IP: {ip_dst}:{dst_port}, URL: {url}\n")
 
             # 处理 HTTPS 流量中的 SNI
             sni = self.extract_sni(packet)
             if sni:
                 self.log_file.write(
-                    f"Time: {datetime.now()}, Source IP: {ip_src}, Destination IP: {ip_dst}, Domain: {sni}\n")
+                    f"Time: {datetime.now()}, Source IP: {ip_src}:{src_port}, Destination IP: {ip_dst}:{dst_port}, Domain: {sni}\n")
 
-            # 如果没有 URL 和 SNI，记录IP信息
+            # 如果没有 URL 和 SNI，记录IP和端口信息
             if not url and not sni:
                 self.log_file.write(
-                    f"Time: {datetime.now()}, Source IP: {ip_src}, Destination IP: {ip_dst}, No URL info\n")
+                    f"Time: {datetime.now()}, Source IP: {ip_src}:{src_port}, Destination IP: {ip_dst}:{dst_port}, No URL info\n")
 
             self.log_file.flush()
 
