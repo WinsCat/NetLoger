@@ -15,8 +15,10 @@ import servicemanager
 import socket
 from scapy.all import sniff, IP, TCP, UDP
 from scapy.layers.http import HTTPRequest
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
+import zipfile
+import shutil
 
 
 class NetworkLogService(win32serviceutil.ServiceFramework):
@@ -29,6 +31,9 @@ class NetworkLogService(win32serviceutil.ServiceFramework):
         self.hWaitStop = win32event.CreateEvent(None, 0, 0, None)
         socket.setdefaulttimeout(60)
         self.log_file = None
+        self.log_file_path = None
+        self.last_compression_time = datetime.now()
+        self.log_dir = "C:\\network_logs"  # 日志存储目录
 
     def SvcStop(self):
         self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
@@ -45,11 +50,11 @@ class NetworkLogService(win32serviceutil.ServiceFramework):
 
     def create_log_file(self):
         """创建新的日志文件，按小时保存"""
-        log_dir = "C:\\network_logs"
         current_time = datetime.now().strftime('%Y-%m-%d_%H')
-        folder_path = os.path.join(log_dir, current_time.split('_')[0])  # 按天建立文件夹
+        folder_path = os.path.join(self.log_dir, current_time.split('_')[0])  # 按天建立文件夹
         os.makedirs(folder_path, exist_ok=True)
         file_path = os.path.join(folder_path, f"log_{current_time}.txt")
+        self.log_file_path = file_path
         return open(file_path, "a")
 
     def extract_http_url(self, packet):
@@ -103,10 +108,43 @@ class NetworkLogService(win32serviceutil.ServiceFramework):
 
             self.log_file.flush()
 
+        # 检查是否需要压缩日志
+        self.check_and_compress_log()
+
+    def check_and_compress_log(self):
+        """每小时压缩一次日志"""
+        current_time = datetime.now()
+        # 如果时间间隔超过一小时，则压缩日志文件
+        if current_time - self.last_compression_time >= timedelta(hours=1):
+            self.compress_log_file()
+            self.log_file.close()
+            self.log_file = self.create_log_file()  # 创建新的日志文件
+            self.last_compression_time = current_time
+
+        # 每次数据包到达时，执行日志清理操作
+        self.clean_old_logs()
+
+    def compress_log_file(self):
+        """压缩日志文件为.zip格式"""
+        if self.log_file_path and os.path.exists(self.log_file_path):
+            zip_file_path = self.log_file_path.replace('.txt', '.zip')
+            with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                zipf.write(self.log_file_path, os.path.basename(self.log_file_path))
+            os.remove(self.log_file_path)  # 删除原始日志文件
+
+    def clean_old_logs(self):
+        """删除7天前的日志文件"""
+        current_time = datetime.now()
+        for folder in os.listdir(self.log_dir):
+            folder_path = os.path.join(self.log_dir, folder)
+            if os.path.isdir(folder_path):
+                folder_date = datetime.strptime(folder, '%Y-%m-%d')
+                if current_time - folder_date >= timedelta(days=7):
+                    shutil.rmtree(folder_path)  # 删除整个文件夹及其内容
+
     def main(self):
         """捕获所有端口的网络数据包"""
         sniff(prn=self.packet_callback, store=0)
-
 
 if __name__ == '__main__':
     if len(sys.argv) == 1:
